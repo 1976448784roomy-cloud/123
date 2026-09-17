@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Meridian — an Earth you can turn</title>
+<style>
+  :root{
+    --bg-void: #05070d;
+    --bg-void-2: #080b14;
+    --text-primary: #e8ecf1;
+    --text-secondary: #7d8899;
+    --accent-glow: #5fd4c6;
+    --accent-warm: #f2a65a;
+    --panel-line: rgba(255,255,255,0.09);
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-mono: 'IBM Plex Mono', monospace;
+  }
+
+  @font-face{
+    font-family:'Space Grotesk';
+    src: local('Space Grotesk');
+  }
+
+  *{ box-sizing:border-box; }
+
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background: var(--bg-void);
+    overflow:hidden;
+    font-family: var(--font-display);
+    color: var(--text-primary);
+  }
+
+  #scene-canvas{
+    position:fixed; inset:0; width:100%; height:100%;
+    display:block;
+    cursor: grab;
+    touch-action:none;
+  }
+  #scene-canvas:active{ cursor: grabbing; }
+  #scene-canvas:focus-visible{
+    outline: 1px solid var(--accent-glow);
+    outline-offset: -4px;
+  }
+
+  .veil{
+    position:fixed; inset:0; pointer-events:none;
+    background: radial-gradient(ellipse at center, transparent 40%, rgba(5,7,13,0.55) 100%);
+    z-index:2;
+  }
+
+  .hud{
+    position:fixed; z-index:3; pointer-events:none;
+  }
+
+  .lockup{
+    top: 34px; left: 34px;
+  }
+  .lockup h1{
+    margin:0;
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+  .lockup p{
+    margin: 6px 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    max-width: 240px;
+    color: var(--text-secondary);
+    font-weight: 400;
+  }
+
+  .readout{
+    bottom: 34px; left: 34px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-secondary);
+    display:flex;
+    gap: 22px;
+  }
+  .readout .field{ display:flex; flex-direction:column; gap:4px; }
+  .readout .field span:first-child{
+    font-size: 10px;
+    color: rgba(125,136,153,0.7);
+  }
+  .readout .field span:last-child{
+    color: var(--accent-glow);
+    font-size: 14px;
+    min-width: 64px;
+  }
+
+  .controls-hint{
+    bottom: 34px; right: 34px;
+    text-align: right;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    pointer-events: auto;
+  }
+  .controls-hint button{
+    pointer-events: auto;
+    background:none;
+    border:none;
+    color: var(--text-secondary);
+    font-family: var(--font-display);
+    font-size: 12px;
+    padding: 0;
+    margin-top: 8px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--panel-line);
+    transition: color 0.2s ease, border-color 0.2s ease;
+  }
+  .controls-hint button:hover{
+    color: var(--accent-glow);
+    border-color: var(--accent-glow);
+  }
+
+  .loading{
+    position:fixed; inset:0; z-index:10;
+    display:flex; align-items:center; justify-content:center;
+    background: var(--bg-void);
+    transition: opacity 0.6s ease;
+  }
+  .loading span{
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-secondary);
+    letter-spacing: 0.04em;
+  }
+  .loading.hidden{ opacity:0; pointer-events:none; }
+
+  #labels-layer{
+    position:fixed; inset:0; z-index:4; pointer-events:none;
+  }
+
+  .city-node{
+    position:absolute; top:0; left:0;
+    display:flex; align-items:center; gap:7px;
+    transform: translate(-50%, -50%);
+    white-space: nowrap;
+    opacity:0;
+  }
+  .city-node .dot{
+    width:5px; height:5px; border-radius:50%;
+    background: var(--accent-glow);
+    box-shadow: 0 0 6px 1px rgba(95,212,198,0.9);
+    flex-shrink:0;
+  }
+  .city-node .tag{
+    display:flex; align-items:baseline; gap:6px;
+    font-size: 12px;
+  }
+  .city-node .tag strong{
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .city-node .tag small{
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-secondary);
+  }
+
+  .geo-label{
+    position:absolute; top:0; left:0;
+    transform: translate(-50%, -50%);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: rgba(232,236,241,0.38);
+    white-space: nowrap;
+    pointer-events:none;
+    opacity:0;
+  }
+  .geo-label.ocean{
+    font-style: italic;
+    color: rgba(95,212,198,0.34);
+  }
+
+  @media (max-width: 640px){
+    .city-node .tag small{ display:none; }
+    .geo-label{ display:none; }
+    .lockup p{ display:none; }
+    .readout{ gap: 16px; }
+    .controls-hint{ display:none; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    * { scroll-behavior: auto !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="loading" id="loading"><span>calibrating orbit…</span></div>
+
+<canvas id="scene-canvas" tabindex="0" aria-label="Interactive 3D globe. Drag to rotate, scroll or pinch to zoom, arrow keys to rotate when focused."></canvas>
+<div class="veil"></div>
+<div id="labels-layer" aria-hidden="true"></div>
+
+<div class="hud lockup">
+  <h1>Meridian</h1>
+  <p>An Earth you can turn in your hands. Drag to spin the globe, scroll to move closer.</p>
+</div>
+
+<div class="hud readout">
+  <div class="field"><span>lat</span><span id="val-lat">00.00°</span></div>
+  <div class="field"><span>lon</span><span id="val-lon">000.00°</span></div>
+  <div class="field"><span>alt</span><span id="val-alt">0 km</span></div>
+</div>
+
+<div class="hud controls-hint">
+  <div>Drag to rotate. Scroll to zoom.</div>
+  <button id="reset-btn" type="button">Reset view</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+
+  var canvas = document.getElementById('scene-canvas');
+  var loadingEl = document.getElementById('loading');
+  var valLat = document.getElementById('val-lat');
+  var valLon = document.getElementById('val-lon');
+  var valAlt = document.getElementById('val-alt');
+  var resetBtn = document.getElementById('reset-btn');
+  var prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ---------- Scene setup ----------
+  var scene = new THREE.Scene();
+  var camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 200);
+  var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: false });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(new THREE.Color(0x05070d), 1);
+
+  // ---------- Lights ----------
+  var sun = new THREE.DirectionalLight(0xffffff, 1.5);
+  sun.position.set(5, 2, 4);
+  scene.add(sun);
+  var ambient = new THREE.AmbientLight(0x223344, 0.55);
+  scene.add(ambient);
+
+  // ---------- Starfield ----------
+  (function buildStars(){
+    var count = 3200;
+    var positions = new Float32Array(count * 3);
+    for(var i = 0; i < count; i++){
+      var r = 40 + Math.random() * 60;
+      var theta = Math.random() * Math.PI * 2;
+      var phi = Math.acos(2 * Math.random() - 1);
+      positions[i*3]     = r * Math.sin(phi) * Math.cos(theta);
+      positions[i*3 + 1] = r * Math.cos(phi);
+      positions[i*3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    var mat = new THREE.PointsMaterial({
+      color: 0xffffff,
+      size: 0.12,
+      transparent: true,
+      opacity: 0.75,
+      sizeAttenuation: true
+    });
+    var stars = new THREE.Points(geo, mat);
+    scene.add(stars);
+  })();
+
+  // ---------- Globe group ----------
+  var globeGroup = new THREE.Group();
+  scene.add(globeGroup);
+
+  var EARTH_R = 1;
+  var loader = new THREE.TextureLoader();
+  loader.crossOrigin = 'anonymous';
+
+  var earthGeo = new THREE.SphereGeometry(EARTH_R, 96, 96);
+  var earthMat = new THREE.MeshPhongMaterial({
+    color: 0xffffff,
+    shininess: 8
+  });
+  var earthMesh = new THREE.Mesh(earthGeo, earthMat);
+  globeGroup.add(earthMesh);
+
+  var cloudGeo = new THREE.SphereGeometry(EARTH_R * 1.008, 96, 96);
+  var cloudMat = new THREE.MeshLambertMaterial({
+    transparent: true,
+    opacity: 0.4,
+    depthWrite: false
+  });
+  var cloudMesh = new THREE.Mesh(cloudGeo, cloudMat);
+  globeGroup.add(cloudMesh);
+
+  // Atmosphere glow (fresnel rim shader)
+  var atmoGeo = new THREE.SphereGeometry(EARTH_R * 1.06, 96, 96);
+  var atmoMat = new THREE.ShaderMaterial({
+    vertexShader: [
+      'varying vec3 vNormal;',
+      'void main(){',
+      '  vNormal = normalize(normalMatrix * normal);',
+      '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+      '}'
+    ].join('\n'),
+    fragmentShader: [
+      'varying vec3 vNormal;',
+      'void main(){',
+      '  float intensity = pow(0.68 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 3.0);',
+      '  gl_FragColor = vec4(0.37, 0.83, 0.78, 1.0) * intensity;',
+      '}'
+    ].join('\n'),
+    blending: THREE.AdditiveBlending,
+    side: THREE.BackSide,
+    transparent: true
+  });
+  var atmoMesh = new THREE.Mesh(atmoGeo, atmoMat);
+  globeGroup.add(atmoMesh);
+
+  // ---------- Geography: lat/lon helpers ----------
+  // Matches the orientation of the equirectangular earth texture used above.
+  function latLonToVec3(lat, lon, radius){
+    var latRad = lat * Math.PI / 180;
+    var lonRad = lon * Math.PI / 180;
+    var x = radius * Math.cos(latRad) * Math.cos(lonRad);
+    var y = radius * Math.sin(latRad);
+    var z = -radius * Math.cos(latRad) * Math.sin(lonRad);
+    return new THREE.Vector3(x, y, z);
+  }
+
+  var CITIES = [
+    { name:'New York',    country:'USA',        lat:40.71,  lon:-74.01 },
+    { name:'London',      country:'UK',         lat:51.51,  lon:-0.13 },
+    { name:'Paris',       country:'France',     lat:48.85,  lon:2.35 },
+    { name:'Tokyo',       country:'Japan',       lat:35.68,  lon:139.69 },
+    { name:'Sydney',      country:'Australia',  lat:-33.87, lon:151.21 },
+    { name:'Cairo',       country:'Egypt',       lat:30.04,  lon:31.24 },
+    { name:'Rio de Janeiro', country:'Brazil',   lat:-22.91, lon:-43.17 },
+    { name:'Moscow',      country:'Russia',      lat:55.76,  lon:37.62 },
+    { name:'Beijing',     country:'China',       lat:39.90,  lon:116.40 },
+    { name:'Mumbai',      country:'India',       lat:19.08,  lon:72.88 },
+    { name:'Nairobi',     country:'Kenya',       lat:-1.29,  lon:36.82 },
+    { name:'Cape Town',   country:'South Africa',lat:-33.92, lon:18.42 },
+    { name:'Mexico City', country:'Mexico',      lat:19.43,  lon:-99.13 },
+    { name:'Singapore',   country:'Singapore',   lat:1.35,   lon:103.82 },
+    { name:'Dubai',       country:'UAE',         lat:25.20,  lon:55.27 },
+    { name:'Los Angeles', country:'USA',         lat:34.05,  lon:-118.24 },
+    { name:'Toronto',     country:'Canada',      lat:43.65,  lon:-79.38 },
+    { name:'Buenos Aires',country:'Argentina',   lat:-34.60, lon:-58.38 },
+    { name:'Istanbul',    country:'Turkey',      lat:41.01,  lon:28.98 },
+    { name:'Jakarta',     country:'Indonesia',   lat:-6.21,  lon:106.85 }
+  ];
+
+  var CONNECTIONS = [
+    [0,1],[0,15],[0,16],[0,6],
+    [1,2],[1,18],[1,5],[1,14],
+    [14,9],[14,10],[14,13],
+    [13,3],[13,4],[13,19],[13,9],
+    [8,3],[7,18],[7,8],
+    [11,10],[6,17],[12,15]
+  ];
+
+  var OCEANS = [
+    { name:'Pacific Ocean',  lat:5,   lon:-160 },
+    { name:'Atlantic Ocean', lat:5,   lon:-32 },
+    { name:'Indian Ocean',   lat:-15, lon:76 },
+    { name:'Southern Ocean', lat:-62, lon:10 },
+    { name:'Arctic Ocean',   lat:82,  lon:20 }
+  ];
+
+  var CONTINENTS = [
+    { name:'North America', lat:48, lon:-102 },
+    { name:'South America', lat:-16, lon:-60 },
+    { name:'Europe',        lat:50, lon:17 },
+    { name:'Africa',        lat:6,  lon:21 },
+    { name:'Asia',          lat:48, lon:92 },
+    { name:'Australia',     lat:-25, lon:134 }
+  ];
+
+  // ---------- DOM label layer ----------
+  var labelsLayer = document.getElementById('labels-layer');
+  var labelRecords = [];
+
+  function makeCityLabel(city){
+    var el = document.createElement('div');
+    el.className = 'city-node';
+    el.innerHTML = '<span class="dot"></span><span class="tag"><strong>' +
+      city.name + '</strong><small>' + city.country + '</small></span>';
+    labelsLayer.appendChild(el);
+    labelRecords.push({
+      el: el,
+      pos: latLonToVec3(city.lat, city.lon, EARTH_R * 1.002)
+    });
+  }
+
+  function makeGeoLabel(item, isOcean){
+    var el = document.createElement('div');
+    el.className = 'geo-label' + (isOcean ? ' ocean' : '');
+    el.textContent = item.name;
+    labelsLayer.appendChild(el);
+    labelRecords.push({
+      el: el,
+      pos: latLonToVec3(item.lat, item.lon, EARTH_R * 1.002),
+      isGeo: true
+    });
+  }
+
+  CITIES.forEach(makeCityLabel);
+  OCEANS.forEach(function(o){ makeGeoLabel(o, true); });
+  CONTINENTS.forEach(function(c){ makeGeoLabel(c, false); });
+
+  var cityVecs = CITIES.map(function(c){ return latLonToVec3(c.lat, c.lon, EARTH_R); });
+
+  // ---------- Connection arcs ----------
+  function slerpVec3(a, b, t){
+    var dot = THREE.MathUtils.clamp(a.dot(b), -1, 1);
+    var omega = Math.acos(dot);
+    if(omega < 1e-6) return a.clone();
+    var sinOmega = Math.sin(omega);
+    var wa = Math.sin((1 - t) * omega) / sinOmega;
+    var wb = Math.sin(t * omega) / sinOmega;
+    return new THREE.Vector3(
+      a.x * wa + b.x * wb,
+      a.y * wa + b.y * wb,
+      a.z * wa + b.z * wb
+    );
+  }
+
+  function makePulseTexture(){
+    var size = 64;
+    var c = document.createElement('canvas');
+    c.width = c.height = size;
+    var ctx = c.getContext('2d');
+    var grad = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+    grad.addColorStop(0, 'rgba(190,255,246,1)');
+    grad.addColorStop(0.4, 'rgba(95,212,198,0.8)');
+    grad.addColorStop(1, 'rgba(95,212,198,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, size, size);
+    return new THREE.CanvasTexture(c);
+  }
+  var pulseTexture = makePulseTexture();
+
+  var arcs = [];
+  var arcGroup = new THREE.Group();
+  globeGroup.add(arcGroup);
+
+  CONNECTIONS.forEach(function(pair, idx){
+    var a = cityVecs[pair[0]].clone().normalize();
+    var b = cityVecs[pair[1]].clone().normalize();
+    var omega = Math.acos(THREE.MathUtils.clamp(a.dot(b), -1, 1));
+    var bulge = 0.10 + omega * 0.14;
+    var segments = 48;
+    var points = [];
+    for(var i = 0; i <= segments; i++){
+      var t = i / segments;
+      var dir = slerpVec3(a, b, t);
+      var r = EARTH_R + Math.sin(t * Math.PI) * bulge;
+      points.push(dir.clone().multiplyScalar(r));
+    }
+    var geo = new THREE.BufferGeometry().setFromPoints(points);
+    var mat = new THREE.LineBasicMaterial({
+      color: 0x5fd4c6,
+      transparent: true,
+      opacity: 0.38,
+      blending: THREE.AdditiveBlending
+    });
+    var line = new THREE.Line(geo, mat);
+    arcGroup.add(line);
+
+    var spriteMat = new THREE.SpriteMaterial({
+      map: pulseTexture,
+      color: 0xbefff6,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    var sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(0.05, 0.05, 0.05);
+    arcGroup.add(sprite);
+
+    arcs.push({ a: a, b: b, bulge: bulge, sprite: sprite, offset: (idx / CONNECTIONS.length) });
+  });
+
+  var texturesLoaded = 0;
+  function textureDone(){
+    texturesLoaded++;
+    if(texturesLoaded >= 3){
+      loadingEl.classList.add('hidden');
+    }
+  }
+
+  loader.load('https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg', function(tex){
+    earthMat.map = tex;
+    earthMat.needsUpdate = true;
+    textureDone();
+  }, undefined, textureDone);
+
+  loader.load('https://threejs.org/examples/textures/planets/earth_specular_2048.jpg', function(tex){
+    earthMat.specularMap = tex;
+    earthMat.needsUpdate = true;
+    textureDone();
+  }, undefined, textureDone);
+
+  loader.load('https://threejs.org/examples/textures/planets/earth_clouds_1024.png', function(tex){
+    cloudMat.map = tex;
+    cloudMat.alphaMap = tex;
+    cloudMat.needsUpdate = true;
+    textureDone();
+  }, undefined, textureDone);
+
+  // fallback: hide loader after 4s regardless
+  setTimeout(function(){ loadingEl.classList.add('hidden'); }, 4000);
+
+  // ---------- Camera orbit controls (custom) ----------
+  var MIN_R = 1.35, MAX_R = 5.2, START_R = 2.6;
+  var spherical = { theta: 0.6, phi: 1.35, radius: START_R };
+  var targetSpherical = { theta: spherical.theta, phi: spherical.phi, radius: spherical.radius };
+  var autoRotate = !prefersReducedMotion;
+  var userInteracted = false;
+
+  function clampPhi(p){
+    var EPS = 0.06;
+    return Math.max(EPS, Math.min(Math.PI - EPS, p));
+  }
+
+  function updateCameraFromSpherical(){
+    var s = spherical;
+    var x = s.radius * Math.sin(s.phi) * Math.sin(s.theta);
+    var y = s.radius * Math.cos(s.phi);
+    var z = s.radius * Math.sin(s.phi) * Math.cos(s.theta);
+    camera.position.set(x, y, z);
+    camera.lookAt(0, 0, 0);
+  }
+  updateCameraFromSpherical();
+
+  // Pointer drag
+  var isDragging = false;
+  var lastX = 0, lastY = 0;
+  var activePointers = {};
+
+  function onPointerDown(e){
+    isDragging = true;
+    userInteracted = true;
+    autoRotate = false;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    canvas.setPointerCapture(e.pointerId);
+  }
+  function onPointerMove(e){
+    if(!activePointers[e.pointerId]) return;
+    activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    if(!isDragging) return;
+    var dx = e.clientX - lastX;
+    var dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    targetSpherical.theta -= dx * 0.0045;
+    targetSpherical.phi = clampPhi(targetSpherical.phi - dy * 0.0045);
+  }
+  function onPointerUp(e){
+    isDragging = false;
+    delete activePointers[e.pointerId];
+  }
+
+  canvas.addEventListener('pointerdown', onPointerDown);
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
+
+  // Wheel zoom
+  canvas.addEventListener('wheel', function(e){
+    e.preventDefault();
+    userInteracted = true;
+    autoRotate = false;
+    var delta = e.deltaY * 0.0016;
+    targetSpherical.radius = Math.max(MIN_R, Math.min(MAX_R, targetSpherical.radius + delta * targetSpherical.radius));
+  }, { passive: false });
+
+  // Keyboard
+  canvas.addEventListener('keydown', function(e){
+    userInteracted = true;
+    autoRotate = false;
+    var step = 0.06;
+    if(e.key === 'ArrowLeft'){ targetSpherical.theta -= step; }
+    else if(e.key === 'ArrowRight'){ targetSpherical.theta += step; }
+    else if(e.key === 'ArrowUp'){ targetSpherical.phi = clampPhi(targetSpherical.phi - step); }
+    else if(e.key === 'ArrowDown'){ targetSpherical.phi = clampPhi(targetSpherical.phi + step); }
+    else if(e.key === '+' || e.key === '='){ targetSpherical.radius = Math.max(MIN_R, targetSpherical.radius - 0.2); }
+    else if(e.key === '-' || e.key === '_'){ targetSpherical.radius = Math.min(MAX_R, targetSpherical.radius + 0.2); }
+    else { return; }
+    e.preventDefault();
+  });
+
+  // Reset
+  resetBtn.addEventListener('click', function(){
+    autoRotate = !prefersReducedMotion;
+    userInteracted = false;
+    targetSpherical.theta = 0.6;
+    targetSpherical.phi = 1.35;
+    targetSpherical.radius = START_R;
+  });
+
+  // ---------- Resize ----------
+  window.addEventListener('resize', function(){
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // ---------- Readout ----------
+  var EARTH_RADIUS_KM = 6371;
+  function updateReadout(){
+    var dir = camera.position.clone().normalize();
+    var lat = Math.asin(dir.y) * 180 / Math.PI;
+    var lon = Math.atan2(-dir.z, dir.x) * 180 / Math.PI;
+    var altKm = Math.round((spherical.radius - EARTH_R) * EARTH_RADIUS_KM);
+    valLat.textContent = (lat >= 0 ? lat.toFixed(2) + '°N' : Math.abs(lat).toFixed(2) + '°S');
+    valLon.textContent = (lon >= 0 ? lon.toFixed(2) + '°E' : Math.abs(lon).toFixed(2) + '°W');
+    valAlt.textContent = altKm.toLocaleString() + ' km';
+  }
+
+  // ---------- Per-frame arc pulses ----------
+  function updateArcPulses(elapsed){
+    var speed = 0.16;
+    for(var i = 0; i < arcs.length; i++){
+      var arc = arcs[i];
+      var t = (elapsed * speed + arc.offset) % 1;
+      var dir = slerpVec3(arc.a, arc.b, t);
+      var r = EARTH_R + Math.sin(t * Math.PI) * arc.bulge;
+      arc.sprite.position.copy(dir.multiplyScalar(r));
+      var fade = Math.sin(t * Math.PI);
+      arc.sprite.material.opacity = 0.15 + fade * 0.75;
+    }
+  }
+
+  // ---------- Per-frame label projection ----------
+  var projVec = new THREE.Vector3();
+  var camDir = new THREE.Vector3();
+  var halfW, halfH;
+  function updateLabels(){
+    halfW = window.innerWidth / 2;
+    halfH = window.innerHeight / 2;
+    camDir.copy(camera.position).normalize();
+    for(var i = 0; i < labelRecords.length; i++){
+      var rec = labelRecords[i];
+      var facing = rec.pos.clone().normalize().dot(camDir);
+      var visibleThreshold = rec.isGeo ? 0.28 : 0.12;
+      if(facing < visibleThreshold){
+        rec.el.style.opacity = '0';
+        rec.el.style.pointerEvents = 'none';
+        continue;
+      }
+      projVec.copy(rec.pos).project(camera);
+      var x = projVec.x * halfW + halfW;
+      var y = -projVec.y * halfH + halfH;
+      rec.el.style.transform = 'translate(-50%, -50%) translate(' + x.toFixed(1) + 'px,' + y.toFixed(1) + 'px)';
+      var opacity = Math.min(1, (facing - visibleThreshold) / 0.25);
+      rec.el.style.opacity = String(rec.isGeo ? opacity * 0.85 : opacity);
+    }
+  }
+
+  // ---------- Animation loop ----------
+  var clock = new THREE.Clock();
+  function animate(){
+    requestAnimationFrame(animate);
+    var dt = Math.min(clock.getDelta(), 0.1);
+
+    if(autoRotate){
+      targetSpherical.theta += dt * 0.045;
+    }
+
+    // damping toward target
+    spherical.theta += (targetSpherical.theta - spherical.theta) * 0.09;
+    spherical.phi += (targetSpherical.phi - spherical.phi) * 0.09;
+    spherical.radius += (targetSpherical.radius - spherical.radius) * 0.09;
+
+    updateCameraFromSpherical();
+
+    cloudMesh.rotation.y += dt * 0.012;
+
+    updateReadout();
+    updateArcPulses(clock.elapsedTime);
+    updateLabels();
+
+    renderer.render(scene, camera);
+  }
+  animate();
+
+})();
+</script>
+</body>
+</html>
